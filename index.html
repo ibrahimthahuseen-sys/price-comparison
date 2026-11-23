@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supplier Quote Comparison</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@600;700&family=Red+Hat+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: a buyer's working tool, calm and exact, like a procurement desk sheet.
+   IDEA: the tender comparison sheet — one row per item, one column block per supplier.
+   PICTURE: the live comparison grid itself, with the winning cell in each row lit magenta.
+   COLOUR and TYPE: oxford blue band, white panels, magenta for the lowest price; Red Hat Display + Text.
+   LAYOUT: blue band with title and drop zone, summary strip, then the full-width sheet. */
+:root{color-scheme:light dark;--bg:light-dark(#f3f5f9,#070f26);--panel:light-dark(#fff,#0e1a3a);--ink:light-dark(#0b1630,#e8ecf6);--mute:light-dark(#5a6580,#9aa6c4);--line:light-dark(#dfe4ee,#22305a);--blue:#0b1f4b;--mag:#e0115f;--magbg:light-dark(#fde6ef,#4a0f2a);--magink:light-dark(#a8003f,#ff8db7);--warn:light-dark(#8a5a00,#f3c66b)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Red Hat Text",system-ui,sans-serif;overflow-x:clip}
+h1,h2{font-family:"Red Hat Display",system-ui,sans-serif;line-height:1.05;text-wrap:balance;margin:0}
+h1{font-size:clamp(30px,4.4vw,46px)}h2{font-size:20px}
+.band{padding:clamp(24px,3.5vw,52px) max(5vw,16px)}
+.top{background:var(--blue);color:#fff;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:32px;align-items:center}
+.top p{color:#c9d3ec;margin:12px 0 0;max-width:46ch}
+.drop{border:2px dashed #5d74b0;border-radius:14px;padding:26px;text-align:center;background:#11295f;cursor:pointer;transition:background .2s,border-color .2s}
+.drop:hover,.drop.over,.drop:focus-visible{background:#163374;border-color:#fff;outline:none}
+.drop strong{display:block;font-family:"Red Hat Display";font-size:20px}
+.drop span{color:#c9d3ec;font-size:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{font:600 15px "Red Hat Text",sans-serif;min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.btn:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
+.btn.pri{background:var(--mag);border-color:var(--mag);color:#fff}
+.btn.ghost{background:transparent;color:#fff;border-color:#5d74b0}
+.btn:disabled{opacity:.5;cursor:default}
+.top .row{margin-top:14px;justify-content:center}
+#queue{list-style:none;padding:0;margin:14px 0 0;font-size:14px;color:#dfe6f7;text-align:left}
+#queue li{padding:4px 0;display:flex;gap:8px}#queue .err{color:#ffb3cc}
+main{max-width:1400px;margin:0 auto}
+.sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;padding-bottom:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.card small{color:var(--mute);font-size:13px;display:block}
+.card b{font:700 clamp(22px,2.6vw,30px) "Red Hat Display",sans-serif;display:block;margin-top:2px;overflow-wrap:anywhere}
+.card.win b{color:var(--magink)}
+.bar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.seg button{font:500 14px "Red Hat Text";border:0;background:transparent;color:var(--ink);padding:0 14px;min-height:40px;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--blue);color:#fff}
+.scroll{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+thead th{background:var(--blue);color:#fff;font-weight:600;position:sticky;top:0}
+thead tr:first-child th{font-family:"Red Hat Display";font-size:15px}
+th.sup{border-left:2px solid #2d4683;text-align:center}
+td.s0{border-left:2px solid var(--line)}
+th.l,td.l{text-align:left;white-space:normal;min-width:180px}
+td.l{font-weight:500}
+td.best{background:var(--magbg);color:var(--magink);font-weight:700}
+td.best.tot::after{content:" ▼ lowest";font-size:11px;font-weight:600}
+td.na{color:var(--mute)}
+[contenteditable]{border-radius:4px;padding:1px 3px;outline:none}
+[contenteditable]:hover{box-shadow:inset 0 0 0 1px var(--line)}[contenteditable]:focus{box-shadow:inset 0 0 0 2px var(--mag)}
+tfoot td{font-weight:700;border-top:2px solid var(--ink)}
+.x{border:0;background:none;color:inherit;cursor:pointer;font-size:16px;opacity:.6;width:28px;height:28px;border-radius:6px}.x:hover{opacity:1;background:#ffffff22}
+.flag{color:var(--warn);font-size:12px}
+.empty{padding:48px 20px;text-align:center;color:var(--mute)}
+.note{color:var(--mute);font-size:13px;margin:10px 2px 0}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;max-width:90vw}
+#toast.on{opacity:1}
+details{margin-top:14px}summary{cursor:pointer;color:var(--mute);font-size:14px}
+textarea{width:100%;min-height:140px;font:15px/1.4 ui-monospace,monospace;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel);color:var(--ink);margin:8px 0}
+input.sn{font:16px "Red Hat Text";min-height:44px;border:1px solid var(--line);border-radius:10px;padding:0 12px;background:var(--panel);color:var(--ink)}
+@media(max-width:820px){.top{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<header class="band top">
+  <div><h1>Supplier quote comparison</h1>
+  <p>Drop in each supplier's quotation. Items, quoted quantities and unit prices are pulled into one sheet, side by side, with the lowest price in every row highlighted.</p></div>
+  <div>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload quotations">
+      <strong>Upload quotations</strong>
+      <span>PDF, Excel, CSV or a photo of the quote · one file per supplier · several at once is fine</span>
+      <input type="file" id="file" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,image/*" hidden>
+    </div>
+    <div class="row"><button class="btn ghost" id="pasteBtn">Paste quote text</button><button class="btn ghost" id="clearBtn">Clear all</button></div>
+    <ul id="queue" aria-live="polite"></ul>
+  </div>
+</header>
+<main>
+  <section class="band sum" id="sum"></section>
+  <section class="band">
+    <div class="bar">
+      <h2>Comparison sheet</h2>
+      <div class="row">
+                <button class="btn" id="copyBtn">Copy table</button>
+        <button class="btn pri" id="xlsBtn">Export to Excel</button>
+      </div>
+    </div>
+    <div class="scroll" id="wrap"></div>
+    <p class="note" id="note">Click any item name, supplier name, qty or price to correct it. Rename an item to match another row and the two rows merge.</p>
+    <details id="pasteBox"><summary>Paste a quotation as text</summary>
+      <input class="sn" id="pasteName" placeholder="Supplier name (optional)">
+      <textarea id="pasteText" placeholder="Paste the quotation lines here…"></textarea>
+      <button class="btn pri" id="pasteGo">Read this quote</button>
+    </details>
+  </section>
+</main>
+<div id="toast" role="status"></div>
+<script>
+{
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num=v=>{if(v==null||v==='')return null;if(typeof v==='number')return isFinite(v)?v:null;const n=parseFloat(String(v).replace(/[^0-9.\-]/g,''));return isFinite(n)?n:null};
+const f2=n=>n==null?'':n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),3200)};
+
+const SAMPLE={sample:true,mode:'incl',rows:[
+ {key:'a4 copy paper 80gsm',name:'A4 copy paper 80gsm',unit:'ream',qty:50},
+ {key:'blue ballpoint pen',name:'Blue ballpoint pen',unit:'box',qty:20},
+ {key:'stapler heavy duty',name:'Stapler, heavy duty',unit:'pc',qty:5},
+ {key:'lever arch file',name:'Lever arch file',unit:'pc',qty:40},
+ {key:'whiteboard marker set',name:'Whiteboard marker set',unit:'set',qty:10},
+ {key:'printer toner 85a',name:'Printer toner 85A',unit:'pc',qty:6}],
+ suppliers:[
+ {id:'s1',name:'Island Office Supplies',cells:{'a4 copy paper 80gsm':{price:62,gst:8,qty:50},'blue ballpoint pen':{price:45,gst:8,qty:20},'stapler heavy duty':{price:210,gst:8,qty:5},'lever arch file':{price:38,gst:8,qty:40},'whiteboard marker set':{price:95,gst:8,qty:10},'printer toner 85a':{price:780,gst:8,qty:6}}},
+ {id:'s2',name:'Coral Trading',cells:{'a4 copy paper 80gsm':{price:58,gst:8,qty:50},'blue ballpoint pen':{price:48,gst:8,qty:20},'stapler heavy duty':{price:195,gst:8,qty:5},'lever arch file':{price:41,gst:8,qty:40},'printer toner 85a':{price:745,gst:8,qty:6}}},
+ {id:'s3',name:'Atoll Stationers',cells:{'a4 copy paper 80gsm':{price:60,gst:8,qty:50},'blue ballpoint pen':{price:42,gst:8,qty:20},'stapler heavy duty':{price:225,gst:8,qty:5},'lever arch file':{price:36,gst:8,qty:40},'whiteboard marker set':{price:88,gst:8,qty:10},'printer toner 85a':{price:760,gst:8,qty:6}}}]};
+
+let S;try{S=JSON.parse(localStorage.getItem('qc-state3'))}catch(e){}
+if(!S||!S.rows)S=JSON.parse(JSON.stringify(SAMPLE));
+const save=()=>{try{localStorage.setItem('qc-state3',JSON.stringify(S))}catch(e){}};
+
+function cellCalc(c){if(!c||c.price==null)return null;return{price:c.price,qty:c.qty??null}}
+const isBest=(x,v)=>v&&x.min!=null&&Math.abs(v.price-x.min)<1e-9&&x.vals.filter(Boolean).length>1;
+function compute(){
+  const res=S.rows.map(r=>{const vals=S.suppliers.map(s=>cellCalc(s.cells[r.key]));const xs=vals.filter(Boolean).map(v=>v.price);const min=xs.length?Math.min(...xs):null;return{r,vals,min}});
+  const tots=S.suppliers.map((s,i)=>{let t=0,n=0;res.forEach(x=>{const v=x.vals[i];if(v){t+=v.price*(x.r.qty||1);n++}});return{t,n,complete:n===S.rows.length}});
+  return{res,tots};
+}
+
+function render(){
+  const {res,tots}=compute();const wrap=$('#wrap');
+  if(!S.suppliers.length){wrap.innerHTML='<div class="empty">No quotations yet. Upload one file per supplier above to build the comparison.</div>';$('#sum').innerHTML='';return}
+  const sup=S.suppliers;
+  let h='<table><thead><tr><th class="l" rowspan="2">Item</th><th rowspan="2">Unit</th><th rowspan="2">Qty</th>'+sup.map((s,i)=>`<th class="sup"><span contenteditable data-sname="${i}">${esc(s.name)}</span> <button class="x" data-del="${i}" aria-label="Remove ${esc(s.name)}">×</button></th>`).join('')+'</tr><tr>'+sup.map(()=>'<th class="sup">Price</th>').join('')+'</tr></thead><tbody>';
+  res.forEach((x,ri)=>{h+=`<tr><td class="l"><span contenteditable data-rname="${ri}">${esc(x.r.name)}</span> <button class="x" data-rdel="${ri}" aria-label="Remove row" style="color:var(--mute)">×</button></td><td><span contenteditable data-ru="${ri}">${esc(x.r.unit||'')}</span></td><td><span contenteditable data-rq="${ri}">${x.r.qty??''}</span></td>`;
+    x.vals.forEach((v,si)=>{
+      if(!v){h+=`<td class="s0 na"><span contenteditable data-p="${ri}-${si}"></span>not quoted</td>`;return}
+      h+=`<td class="s0${isBest(x,v)?' best':''}"><span contenteditable data-p="${ri}-${si}">${f2(v.price)}</span></td>`});
+    h+='</tr>'});
+  wrap.innerHTML=h+'</tbody></table>';
+  // summary
+  const wins=sup.map(()=>0);res.forEach(x=>x.vals.forEach((v,i)=>{if(isBest(x,v))wins[i]++}));
+  const qOf=x=>x.r.qty||1;
+  const mix=res.reduce((a,x)=>a+(x.min??0)*qOf(x),0);
+  const bi=tots.reduce((b,t,i)=>t.complete&&(b<0||t.t<tots[b].t)?i:b,-1);
+  const wi=wins.indexOf(Math.max(...wins));
+  $('#sum').innerHTML=`<div class="card win"><small>Lowest complete quote (qty × price)</small><b>${bi>=0?esc(sup[bi].name):'No supplier quoted every item'}</b><small>${bi>=0?f2(tots[bi].t)+' for all '+S.rows.length+' items':''}</small></div>
+  <div class="card"><small>Most lowest-price items</small><b>${esc(sup[wi].name)}</b><small>Cheapest on ${wins[wi]} of ${S.rows.length} items</small></div>
+  <div class="card"><small>Best mix — buy each item from its cheapest supplier</small><b>${f2(mix)}</b><small>${bi>=0&&tots[bi].t>mix?'Saves '+f2(tots[bi].t-mix)+' vs. '+esc(sup[bi].name):'Same as the best single quote'}</small></div>
+  <div class="card"><small>Suppliers · items compared</small><b>${sup.length} · ${S.rows.length}</b><small>${S.sample?'Sample data shown, upload or clear to start':'Comparing unit prices'}</small></div>`;
+}
+
+// ---------- editing ----------
+function rowKeyMerge(ri,newName){const r=S.rows[ri];const k=norm(newName);if(!k)return;const t=S.rows.findIndex((x,i)=>i!==ri&&x.key===k);
+  if(t>=0){S.suppliers.forEach(s=>{if(s.cells[r.key]&&!s.cells[k])s.cells[k]=s.cells[r.key];delete s.cells[r.key]});S.rows.splice(ri,1);toast('Rows merged')}
+  else{S.suppliers.forEach(s=>{if(s.cells[r.key]){s.cells[k]=s.cells[r.key];if(k!==r.key)delete s.cells[r.key]}});r.key=k;r.name=newName.trim()}}
+$('#wrap').addEventListener('focusout',e=>{const el=e.target,d=el.dataset,t=el.textContent.trim();if(!el.isContentEditable)return;S.sample=false;
+  if(d.sname!=null)S.suppliers[+d.sname].name=t||'Supplier';
+  else if(d.rname!=null)rowKeyMerge(+d.rname,t);
+  else if(d.ru!=null)S.rows[+d.ru].unit=t;
+  else if(d.rq!=null)S.rows[+d.rq].qty=num(t);
+  else if(d.p!=null||d.q!=null){const [ri,si]=(d.p??d.q).split('-').map(Number);const s=S.suppliers[si],k=S.rows[ri].key;const c=s.cells[k]||(s.cells[k]={price:null,gst:null,qty:null});if(d.p!=null)c.price=num(t);else c.qty=num(t);if(c.price==null)delete s.cells[k]}
+  save();render()});
+$('#wrap').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.isContentEditable){e.preventDefault();e.target.blur()}});
+$('#wrap').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.del!=null){const s=S.suppliers.splice(+b.dataset.del,1)[0];S.rows=S.rows.filter(r=>S.suppliers.some(x=>x.cells[r.key]));toast('Removed '+s.name)}
+  if(b.dataset.rdel!=null){const r=S.rows.splice(+b.dataset.rdel,1)[0];S.suppliers.forEach(s=>delete s.cells[r.key])}
+  save();render()});
+$('#clearBtn').onclick=()=>{S={mode:S.mode,rows:[],suppliers:[]};save();render();$('#queue').innerHTML=''};
+
+// ---------- libraries (loaded on demand) ----------
+const libs={};
+const load=src=>libs[src]||(libs[src]=new Promise((ok,no)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>no(new Error('Could not load '+src));document.head.appendChild(s)}));
+const XLSX_URL='https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
+const PDF='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+async function pdfLib(){await load(PDF+'pdf.min.js');await load(PDF+'pdf.worker.min.js');pdfjsLib.GlobalWorkerOptions.workerSrc=PDF+'pdf.worker.min.js';return pdfjsLib}
+
+// ---------- reading files ----------
+async function readFile(file){
+  const n=file.name.toLowerCase();
+  if(/\.(xlsx|xls|csv)$/.test(n)){await load(XLSX_URL);const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+    return{text:wb.SheetNames.map(sn=>'## Sheet '+sn+'\n'+XLSX.utils.sheet_to_csv(wb.Sheets[sn],{blankrows:false})).join('\n\n'),wb}}
+  if(n.endsWith('.pdf')){const lib=await pdfLib();const doc=await lib.getDocument({data:await file.arrayBuffer()}).promise;let text='';
+    for(let p=1;p<=Math.min(doc.numPages,15);p++){const pg=await doc.getPage(p);const tc=await pg.getTextContent();let lastY=null,line='';
+      for(const it of tc.items){const y=Math.round(it.transform[5]);if(lastY!==null&&Math.abs(y-lastY)>3){text+=line.trim()+'\n';line=''}line+=it.str+' ';lastY=y}text+=line.trim()+'\n\n'}
+    if(text.replace(/\s/g,'').length>40)return{text};
+    const images=[];for(let p=1;p<=Math.min(doc.numPages,4);p++){const pg=await doc.getPage(p);const vp=pg.getViewport({scale:1.8});const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;images.push(await new Promise(r=>c.toBlob(r,'image/png')))}
+    return{images}}
+  if(file.type.startsWith('image/'))return{images:[file]};
+  return{text:await file.text()};
+}
+
+// heuristic fallback for spreadsheets when AI reading is unavailable
+function heuristic(wb){for(const sn of wb.SheetNames){const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,blankrows:false});
+  for(let i=0;i<Math.min(rows.length,30);i++){const hd=rows[i].map(c=>String(c??'').toLowerCase());const col=re=>hd.findIndex(h=>re.test(h));
+    const ci=col(/item|description|particular|product|material|name/),cp=col(/unit ?price|rate|price|unit cost/),cg=col(/gst|tax|vat/),cq=col(/qty|quantity/),cu=col(/^unit$|uom/);
+    if(ci<0||cp<0)continue;const items=[];
+    for(const r of rows.slice(i+1)){const name=String(r[ci]??'').trim(),price=num(r[cp]);if(!name||price==null||/total|discount|grand/i.test(name))continue;
+      let g=cg>=0?num(r[cg]):null;if(g!=null&&g>0&&g<1)g*=100;else if(g!=null&&g>40)g=g/price*100;items.push({name,unit_price:price,gst_percent:g,qty:cq>=0?num(r[cq]):null,unit:cu>=0?r[cu]:null})}
+    if(items.length)return{supplier:null,items}}}return null}
+
+const use=n=>window.claude&&window.claude.use?window.claude.use(n).catch(()=>null):Promise.resolve(null);
+let sampleFn;use('sample').then(s=>sampleFn=s);
+const PROMPT=`You read a supplier quotation and extract its line items for a price comparison.
+Return ONLY a JSON object, no prose:
+{"supplier": string|null, "currency": string|null, "items": [{"name": string, "qty": number|null, "unit": string|null, "unit_price": number, "gst_percent": number|null, "match": string|null}]}
+Rules:
+- supplier = the company issuing the quote (letterhead / "From"), not the customer it is addressed to.
+- unit_price is the price for ONE unit EXCLUDING GST/VAT/tax. If the quote only shows a line amount, divide by qty. If a price is stated as GST-inclusive, remove the GST.
+- gst_percent: the GST/VAT/tax rate for that line. If only one rate is given for the whole quote, use it on every taxable line. If the quote shows no tax at all, use null.
+- Skip subtotal, total, discount, delivery-note and terms rows. Keep delivery or installation charges only if they are priced line items.
+- Numbers must be plain numbers (no commas, no currency symbols).
+- match: the list below holds item names already in the comparison from other suppliers. If this line is the same product (different wording or abbreviation is fine, but size, model and grade must agree), set match to that exact name; otherwise null.
+Existing item names: `;
+
+async function extract(file,label){
+  const got=label?{text:file}:await readFile(file);
+  const existing=JSON.stringify(S.rows.map(r=>r.name));
+  if(sampleFn){
+    const input=PROMPT+existing+'\n\nFile name: '+(label||file.name)+(got.text?'\n\nQuotation content:\n'+got.text.slice(0,60000):'\n\nThe quotation is in the attached image(s).');
+    const opts={modelTier:'default'};
+    if(got.images){const lim=await sampleFn.limits?.();if(lim&&!lim.images)throw new Error('This view cannot read images; try the PDF text or an Excel file');opts.images=got.images}
+    let out;if(typeof sampleFn.json==='function')out=await sampleFn.json(input,opts);else{const r=await sampleFn(input,opts);out=JSON.parse(r.text.slice(r.text.indexOf('{'),r.text.lastIndexOf('}')+1))}
+    return out}
+  if(got.wb){const h=heuristic(got.wb);if(h)return h}
+  throw new Error('Automatic reading is unavailable in this view — open the page on claude.ai, or use an Excel/CSV quote with Item and Price columns');
+}
+
+function addSupplier(data,fallbackName){
+  if(S.sample){S.rows=[];S.suppliers=[];S.sample=false}
+  const items=(data.items||[]).filter(it=>it&&it.name&&num(it.unit_price)!=null);
+  if(!items.length)throw new Error('No priced items found');
+  const sup={id:'s'+Date.now()+Math.random().toString(36).slice(2,6),name:(data.supplier||fallbackName).toString().slice(0,80),cells:{}};
+  for(const it of items){let row=null;
+    if(it.match){row=S.rows.find(r=>r.name===it.match)||S.rows.find(r=>r.key===norm(it.match))}
+    if(!row)row=S.rows.find(r=>r.key===norm(it.name));
+    if(!row){row={key:norm(it.name),name:String(it.name).trim(),unit:it.unit||''};S.rows.push(row)}
+    if(!row.unit&&it.unit)row.unit=it.unit;if(row.qty==null&&num(it.qty)!=null)row.qty=num(it.qty);
+    if(!sup.cells[row.key])sup.cells[row.key]={price:num(it.unit_price),gst:num(it.gst_percent),qty:num(it.qty)}}
+  S.suppliers.push(sup);save();render();return items.length;
+}
+
+let busy=Promise.resolve();
+function enqueue(job,label){const li=document.createElement('li');li.textContent='⏳ Reading '+label+'…';$('#queue').prepend(li);
+  busy=busy.then(async()=>{try{const n=await job();li.textContent='✓ '+label+' — '+n+' items'}catch(e){li.className='err';li.textContent='✕ '+label+': '+(e.message||e.code||e);if(e.code==='rate_limited')toast('Too many requests, wait a moment and retry')}})}
+function handle(files){for(const f of files){const base=f.name.replace(/\.[^.]+$/,'');enqueue(async()=>addSupplier(await extract(f),base),f.name)}}
+const drop=$('#drop'),fi=$('#file');
+drop.onclick=()=>fi.click();drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fi.click()}};
+fi.onchange=()=>{handle([...fi.files]);fi.value=''};
+['dragenter','dragover'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>handle([...e.dataTransfer.files]));
+$('#pasteBtn').onclick=()=>{$('#pasteBox').open=true;$('#pasteText').focus()};
+$('#pasteGo').onclick=()=>{const t=$('#pasteText').value.trim(),nm=$('#pasteName').value.trim()||'Pasted quote '+(S.suppliers.length+1);if(!t)return;
+  enqueue(async()=>{const d=await extract(t,nm);if($('#pasteName').value.trim())d.supplier=nm;return addSupplier(d,nm)},nm);$('#pasteText').value='';$('#pasteName').value=''};
+
+// ---------- export ----------
+function sheetData(){const {res}=compute();const sup=S.suppliers;
+  const h1=['Item','Unit','Qty'],h2=['','',''];sup.forEach(s=>{h1.push(s.name);h2.push('Price')});h1.push('Lowest price','');h2.push('Supplier','Price');
+  const body=res.map(x=>{const row=[x.r.name,x.r.unit||'',x.r.qty??''];const bestIdx=[];x.vals.forEach((v,i)=>{if(v){row.push(v.price);if(isBest(x,v))bestIdx.push(i)}else row.push('not quoted')});
+    row.push(x.vals.map((v,i)=>v&&x.min!=null&&Math.abs(v.price-x.min)<1e-9?sup[i].name:null).filter(Boolean).join(', '),x.min??'');return{row,bestIdx}});
+  return{h1,h2,body}}
+$('#copyBtn').onclick=async()=>{const d=sheetData();const tsv=[d.h1,d.h2,...d.body.map(b=>b.row)].map(r=>r.join('\t')).join('\n');
+  try{await navigator.clipboard.writeText(tsv);toast('Copied, paste into Excel')}catch(e){toast('Copy was blocked by the browser')}};
+$('#xlsBtn').onclick=async()=>{
+  if(!S.suppliers.length)return toast('Upload a quotation first');
+  const b=$('#xlsBtn');b.disabled=true;b.textContent='Preparing…';
+  try{await load(XLSX_URL);const d=sheetData();const aoa=[d.h1,d.h2,...d.body.map(x=>x.row)];const ws=XLSX.utils.aoa_to_sheet(aoa);
+    const n=S.suppliers.length,last=3+n+1;const hd={font:{bold:true,color:{rgb:'FFFFFF'}},fill:{fgColor:{rgb:'0B1F4B'}},alignment:{horizontal:'center',vertical:'center',wrapText:true}};
+    const best={font:{bold:true,color:{rgb:'A8003F'}},fill:{fgColor:{rgb:'FDE6EF'}},numFmt:'#,##0.00'};
+    for(let c=0;c<=last;c++){[0,1].forEach(r=>{const a=XLSX.utils.encode_cell({r,c});if(!ws[a])ws[a]={t:'s',v:''};ws[a].s=hd})}
+    d.body.forEach((x,ri)=>{const r=ri+2;for(let c=2;c<=last;c++){const a=XLSX.utils.encode_cell({r,c});if(ws[a]&&typeof ws[a].v==='number')ws[a].s={numFmt:c===2?'#,##0.##':'#,##0.00'}}
+      x.bestIdx.forEach(i=>{const a=XLSX.utils.encode_cell({r,c:3+i});ws[a].s=best})});
+    ws['!merges']=[{s:{r:0,c:0},e:{r:1,c:0}},{s:{r:0,c:1},e:{r:1,c:1}},{s:{r:0,c:2},e:{r:1,c:2}},{s:{r:0,c:last-1},e:{r:0,c:last}}];
+    ws['!cols']=[{wch:34},{wch:8},{wch:8},...S.suppliers.map(()=>({wch:16})),{wch:24},{wch:13}];
+    ws['!views']=[{state:'frozen',xSplit:1,ySplit:2}];
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Comparison');
+    S.suppliers.forEach(s=>{const rows=[['Item','Unit','Qty','Price']];S.rows.forEach(r=>{const v=cellCalc(s.cells[r.key]);if(v)rows.push([r.name,r.unit||'',r.qty??'',v.price])});
+      const w=XLSX.utils.aoa_to_sheet(rows);for(let c=0;c<4;c++)w[XLSX.utils.encode_cell({r:0,c})].s=hd;w['!cols']=[{wch:34},{wch:8},{wch:8},{wch:13}];
+      XLSX.utils.book_append_sheet(wb,w,s.name.replace(/[\\\/?*\[\]:]/g,' ').slice(0,31)||'Supplier')});
+    const buf=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+    const dl=await use('downloads');
+    if(!dl){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download='supplier-price-comparison.xlsx';document.body.appendChild(a);a.click();a.remove();toast('Excel file downloaded');return}
+    await dl.save({filename:'supplier-price-comparison.xlsx',data:new Blob([buf])});toast('Excel file saved');
+  }catch(e){if(e.code!=='declined')toast('Export failed: '+(e.message||e.code))}
+  finally{b.disabled=false;b.textContent='Export to Excel'}};
+
+render();
+}
+</script>
+</body></html>
