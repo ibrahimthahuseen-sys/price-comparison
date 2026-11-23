@@ -178,10 +178,13 @@ $('#clearBtn').onclick=()=>{S={mode:S.mode,rows:[],suppliers:[]};save();render()
 
 // ---------- libraries (loaded on demand) ----------
 const libs={};
-const load=src=>libs[src]||(libs[src]=new Promise((ok,no)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>no(new Error('Could not load '+src));document.head.appendChild(s)}));
+const load=src=>libs[src]||(libs[src]=new Promise((ok,no)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>{delete libs[src];s.remove();no(new Error('Could not load '+src))};document.head.appendChild(s)}));
 const XLSX_URL='https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
 const PDF='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
-async function pdfLib(){await load(PDF+'pdf.min.js');await load(PDF+'pdf.worker.min.js');pdfjsLib.GlobalWorkerOptions.workerSrc=PDF+'pdf.worker.min.js';return pdfjsLib}
+const PDF2='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/';
+async function pdfLib(){let base=PDF;try{await load(PDF+'pdf.min.js')}catch(e){base=PDF2;await load(PDF2+'pdf.min.js')}
+  try{await load(base+'pdf.worker.min.js')}catch(e){await load((base===PDF?PDF2:PDF)+'pdf.worker.min.js')}
+  if(!window.pdfjsLib)throw new Error('PDF reader did not load — check your internet connection');pdfjsLib.GlobalWorkerOptions.workerSrc=base+'pdf.worker.min.js';return pdfjsLib}
 
 // ---------- reading files ----------
 async function readFile(file){
@@ -189,8 +192,9 @@ async function readFile(file){
   if(/\.(xlsx|xls|csv)$/.test(n)){await load(XLSX_URL);const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
     return{text:wb.SheetNames.map(sn=>'## Sheet '+sn+'\n'+XLSX.utils.sheet_to_csv(wb.Sheets[sn],{blankrows:false})).join('\n\n'),wb}}
   if(n.endsWith('.pdf')){const lib=await pdfLib();const doc=await lib.getDocument({data:await file.arrayBuffer()}).promise;let text='';
-    for(let p=1;p<=Math.min(doc.numPages,15);p++){const pg=await doc.getPage(p);const tc=await pg.getTextContent();let lastY=null,line='';
-      for(const it of tc.items){const y=Math.round(it.transform[5]);if(lastY!==null&&Math.abs(y-lastY)>3){text+=line.trim()+'\n';line=''}line+=it.str+' ';lastY=y}text+=line.trim()+'\n\n'}
+    for(let p=1;p<=Math.min(doc.numPages,15);p++){const pg=await doc.getPage(p);const tc=await pg.getTextContent();
+      const rows=[];for(const it of tc.items){if(!it.str||!it.str.trim())continue;const y=it.transform[5],x=it.transform[4];let r=rows.find(r=>Math.abs(r.y-y)<=3);if(!r)rows.push(r={y,parts:[]});r.parts.push({x,s:it.str})}
+      rows.sort((a,b)=>b.y-a.y);for(const r of rows){r.parts.sort((a,b)=>a.x-b.x);text+=r.parts.map(q=>q.s.trim()).join(' ')+'\n'}text+='\n'}
     if(text.replace(/\s/g,'').length>40)return{text};
     const images=[];for(let p=1;p<=Math.min(doc.numPages,4);p++){const pg=await doc.getPage(p);const vp=pg.getViewport({scale:1.8});const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;images.push(await new Promise(r=>c.toBlob(r,'image/png')))}
     return{images}}
@@ -208,7 +212,6 @@ function heuristic(wb){for(const sn of wb.SheetNames){const rows=XLSX.utils.shee
     if(items.length)return{supplier:null,items}}}return null}
 
 const use=n=>window.claude&&window.claude.use?window.claude.use(n).catch(()=>null):Promise.resolve(null);
-let sampleFn;use('sample').then(s=>sampleFn=s);
 const PROMPT=`You read a supplier quotation and extract its line items for a price comparison.
 Return ONLY a JSON object, no prose:
 {"supplier": string|null, "currency": string|null, "items": [{"name": string, "qty": number|null, "unit": string|null, "unit_price": number, "gst_percent": number|null, "match": string|null}]}
@@ -221,17 +224,56 @@ Rules:
 - match: the list below holds item names already in the comparison from other suppliers. If this line is the same product (different wording or abbreviation is fine, but size, model and grade must agree), set match to that exact name; otherwise null.
 Existing item names: `;
 
+// rule-based reader for quote text (PDF text, pasted text) — works without AI
+const UNITS=/^(pcs?|nos?|no|ea|each|set|sets|box|boxes|kg|g|m|mtr|mtrs|meter|ltr|l|litre|roll|rolls|ream|reams|pkt|pack|bag|bags|ctn|carton|dozen|doz|pair|lot|unit|units|sqm|sqft|ft|lm)\.?$/i;
+const SKIP=/sub ?total|grand ?total|^total|total amount|net total|g\.?s\.?t|t\.?g\.?s\.?t|vat|tax|discount|amount in words|balance|round(ing)? off|bank|account|terms|validity|delivery|payment|signature|thank/i;
+function parseText(text,fallbackName){
+  const lines=text.split(/\n/).map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
+  let gstAll=null;const gm=text.match(/(?:gst|tgst|vat|tax)[^0-9\n]{0,15}(\d{1,2}(?:\.\d+)?)\s*%/i);if(gm)gstAll=+gm[1];
+  const CUR=/^(mvr|rf|usd|us\$|\$|rs\.?|inr|aed|lkr|qar|sar|myr|eur|gbp)$/i,PRE=/^(mvr|rf|usd|\$|rs\.?|inr|aed|lkr|qar|sar|myr|eur|gbp)/i;
+  const isNum=t=>/^[0-9][0-9,]*(\.\d+)?$/.test(t.replace(PRE,''));const val=t=>parseFloat(t.replace(PRE,'').replace(/,/g,''));
+  let order=null,unitCol=true;const cands=[];
+  for(const ln of lines){
+    const lo=ln.toLowerCase();
+    if(/(qty|quantity)/.test(lo)&&/(rate|price|unit cost|amount|total)/.test(lo)&&!/\d{2}/.test(lo)){const q=lo.search(/qty|quantity/),r=lo.search(/rate|unit ?price|price|unit cost/);if(r>=0)order=q<r?'qr':'rq';unitCol=/\bunit\b|uom|\bu\/m\b/.test(lo);continue}
+    if(SKIP.test(ln)||/tel|phone|fax|mobile|e-?mail|@|www\.|date|ref|p\.?o\.? ?no|quot(e|ation) ?no|tin\b|reg/i.test(ln))continue;
+    const toks=ln.split(' ');let i=0;if(toks.length>1&&/^\d{1,3}[.)]?$/.test(toks[0]))i=1;
+    let j=toks.length;while(j>i&&(isNum(toks[j-1])||CUR.test(toks[j-1])||toks[j-1]==='%'||/^\d+(\.\d+)?%$/.test(toks[j-1])||(unitCol&&UNITS.test(toks[j-1]))))j--;
+    const name=toks.slice(i,j).join(' ').replace(/[-–:|]+$/,'').trim();const tail=toks.slice(j);
+    const nums=tail.filter(isNum).map(val);const pt=tail.find(t=>/^\d+(\.\d+)?%$/.test(t));const lineG=pt?parseFloat(pt):null;const unit=(tail.find(t=>UNITS.test(t))||'').replace(/\.$/,'');
+    if(!/[a-z]{2}/i.test(name)||!nums.length)continue;
+    let qty=null,price=null,triple=false;
+    outer:for(let x=0;x<nums.length;x++)for(let y=x+1;y<nums.length;y++)for(let z=y+1;z<nums.length;z++){const m=nums[x]*nums[y];if(nums[z]>0&&Math.abs(m-nums[z])<=Math.max(0.02,nums[z]*0.011)){
+        if(order==='rq'){price=nums[x];qty=nums[y]}else if(order==='qr'){qty=nums[x];price=nums[y]}else{const xi=Number.isInteger(nums[x]);qty=xi?nums[x]:nums[y];price=xi?nums[y]:nums[x]}
+        triple=true;break outer}}
+    if(!triple){if(nums.length<2)continue;if(order==='rq'){price=nums[0];qty=Number.isInteger(nums[1])?nums[1]:null}else{qty=Number.isInteger(nums[0])?nums[0]:null;price=qty==null?nums[0]:nums[1]}}
+    if(!(price>0))continue;
+    cands.push({triple,it:{name,qty,unit,unit_price:price,gst_percent:lineG??gstAll,match:null}});
+  }
+  const items=(cands.some(c=>c.triple)?cands.filter(c=>c.triple):cands).map(c=>c.it);
+  let supplier=null;for(const ln of lines.slice(0,6)){if(/[a-z]{3}/i.test(ln)&&!/quot|invoice|date|page|^to\b|ref|tel|phone|e-?mail|@|www|address|tin|gst|^h\.|road|street|male/i.test(ln)&&ln.length<60){supplier=ln;break}}
+  return{supplier:supplier||fallbackName,items};
+}
+const samplePromise=use('sample');
 async function extract(file,label){
   const got=label?{text:file}:await readFile(file);
-  const existing=JSON.stringify(S.rows.map(r=>r.name));
+  const name=label||file.name;
+  const sampleFn=await samplePromise;
+  let aiErr=null;
   if(sampleFn){
-    const input=PROMPT+existing+'\n\nFile name: '+(label||file.name)+(got.text?'\n\nQuotation content:\n'+got.text.slice(0,60000):'\n\nThe quotation is in the attached image(s).');
-    const opts={modelTier:'default'};
-    if(got.images){const lim=await sampleFn.limits?.();if(lim&&!lim.images)throw new Error('This view cannot read images; try the PDF text or an Excel file');opts.images=got.images}
-    let out;if(typeof sampleFn.json==='function')out=await sampleFn.json(input,opts);else{const r=await sampleFn(input,opts);out=JSON.parse(r.text.slice(r.text.indexOf('{'),r.text.lastIndexOf('}')+1))}
-    return out}
+    try{
+      const existing=JSON.stringify(S.rows.map(r=>r.name));
+      const input=PROMPT+existing+'\n\nFile name: '+name+(got.text?'\n\nQuotation content:\n'+got.text.slice(0,60000):'\n\nThe quotation is in the attached image(s).');
+      const opts={modelTier:'default',cache:false};
+      if(got.images){const lim=sampleFn.limits?await sampleFn.limits():null;if(lim&&!lim.images)throw new Error('this view cannot send images to Claude');opts.images=got.images}
+      const r=await sampleFn(input,opts);const t=r.text||'';const out=JSON.parse(t.slice(t.indexOf('{'),t.lastIndexOf('}')+1));
+      if(out&&out.items&&out.items.length)return out;aiErr=new Error('Claude found no items');
+    }catch(e){aiErr=e;console.warn('AI read failed',e)}
+  }
   if(got.wb){const h=heuristic(got.wb);if(h)return h}
-  throw new Error('Automatic reading is unavailable in this view — open the page on claude.ai, or use an Excel/CSV quote with Item and Price columns');
+  if(got.text){const h=parseText(got.text,name.replace(/\.[^.]+$/,''));if(h.items.length)return h}
+  if(got.images&&!sampleFn)throw new Error('this PDF is a scan or photo with no text layer — open the app on claude.ai to read it automatically');
+  throw new Error(aiErr?('could not read items ('+(aiErr.message||aiErr.code)+')'):'no priced item lines found');
 }
 
 function addSupplier(data,fallbackName){

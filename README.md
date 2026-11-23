@@ -15,8 +15,9 @@ A single-file web app (`index.html`) that compares supplier quotations side by s
 
 ## How to run it
 - **Best:** open the published version on claude.ai. Automatic reading of PDFs, photos and free-form quotes uses Claude there.
-- **Local:** double-click `index.html` to open it in a browser (it needs internet to load its libraries).
-  Opened locally, automatic reading works only for Excel/CSV quotes that have column headers such as
-  *Item/Description*, *Rate/Unit Price* and *Qty*. Editing, comparison and Excel export all work.
+- **Local / GitHub Pages:** open `index.html` in a browser (it needs internet to load its libraries).
+  Without Claude, a built-in reader handles text-based PDFs, Excel/CSV and pasted text. It looks for item lines
+  with quantity, rate and amount. Scanned PDFs and photos can only be read on claude.ai.
+  Editing, comparison and Excel export work everywhere.
 
 Your data is kept in your browser between visits. **Clear all** resets it.
