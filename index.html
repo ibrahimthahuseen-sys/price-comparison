@@ -216,7 +216,7 @@ const PROMPT=`You read a supplier quotation and extract its line items for a pri
 Return ONLY a JSON object, no prose:
 {"supplier": string|null, "currency": string|null, "items": [{"name": string, "qty": number|null, "unit": string|null, "unit_price": number, "gst_percent": number|null, "match": string|null}]}
 Rules:
-- supplier = the company issuing the quote (letterhead / "From"), not the customer it is addressed to.
+- supplier = the NAME of the company issuing the quote (letterhead, logo text, "From", signature or stamp), e.g. "Coral Trading Pvt Ltd". Never a quotation/reference number, date, or the customer it is addressed to. Use null if no company name appears.
 - unit_price is the price for ONE unit EXCLUDING GST/VAT/tax. If the quote only shows a line amount, divide by qty. If a price is stated as GST-inclusive, remove the GST.
 - gst_percent: the GST/VAT/tax rate for that line. If only one rate is given for the whole quote, use it on every taxable line. If the quote shows no tax at all, use null.
 - Skip subtotal, total, discount, delivery-note and terms rows. Keep delivery or installation charges only if they are priced line items.
@@ -227,6 +227,22 @@ Existing item names: `;
 // rule-based reader for quote text (PDF text, pasted text) — works without AI
 const UNITS=/^(pcs?|nos?|no|ea|each|set|sets|box|boxes|kg|g|m|mtr|mtrs|meter|ltr|l|litre|roll|rolls|ream|reams|pkt|pack|bag|bags|ctn|carton|dozen|doz|pair|lot|unit|units|sqm|sqft|ft|lm)\.?$/i;
 const SKIP=/sub ?total|grand ?total|^total|total amount|net total|g\.?s\.?t|t\.?g\.?s\.?t|vat|tax|discount|amount in words|balance|round(ing)? off|bank|account|terms|validity|delivery|payment|signature|thank/i;
+// find the issuing company's name, never a quote number, date or the customer
+const CO=/\b(pvt|private|ltd|limited|llc|l\.l\.c|inc|co\.|company|corp|corporation|trading|traders|enterprises?|supplies|supplier|stores?|hardware|industries|investments?|holdings|group|services|solutions|international|marketing|distributors?|agency|agencies|mart|centre|center)\b/i;
+const NOTNAME=/quot|invoice|estimate|proforma|\bdate\b|\bref\b|\bno\b\.?|number|#|page|valid|tel|phone|fax|mobile|e-?mail|@|www\.|http|tin\b|gst|reg(istration)?\b|account|bank|^h\.|road|street|magu|hingun|floor|address|po box|p\.o/i;
+const looksCode=t=>{const d=(t.match(/\d/g)||[]).length,l=(t.match(/[a-z]/gi)||[]).length;return d>=3&&d>=l*0.5||/^[A-Z]{1,5}[-\/ ]?\d{2,}/i.test(t)||!/[a-z]{3}/i.test(t)};
+function cleanName(ln){return ln.split(/\s+(?=(?:quotation|quote|invoice|date|ref|no\.?|tel|phone|tin|gst)\b)/i)[0].replace(/[:|,–-]+$/,'').trim()}
+function guessSupplier(lines){
+  const head=[];let skipNext=false;
+  for(const ln of lines.slice(0,25)){
+    const TO=/^(to|attn|attention|customer|client|bill(ed)? to|ship to|deliver to|dear|m\/s)\b[\s:.\-]*/i;if(TO.test(ln)){skipNext=ln.replace(TO,'').trim().length<3;continue}
+    if(skipNext){skipNext=false;continue}
+    if(/(qty|quantity|description|particulars)/i.test(ln))break;
+    const c=cleanName(ln);if(c.length<3||c.length>70||looksCode(c)||NOTNAME.test(c))continue;head.push(c)}
+  const co=head.find(h=>CO.test(h));if(co)return co;
+  if(head.length)return head[0];
+  const em=lines.join(' ').match(/@([a-z0-9-]+)\.[a-z.]+/i);if(em&&!/gmail|yahoo|hotmail|outlook|icloud/i.test(em[1]))return em[1].replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+  return null}
 function parseText(text,fallbackName){
   const lines=text.split(/\n/).map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
   let gstAll=null;const gm=text.match(/(?:gst|tgst|vat|tax)[^0-9\n]{0,15}(\d{1,2}(?:\.\d+)?)\s*%/i);if(gm)gstAll=+gm[1];
@@ -251,8 +267,7 @@ function parseText(text,fallbackName){
     cands.push({triple,it:{name,qty,unit,unit_price:price,gst_percent:lineG??gstAll,match:null}});
   }
   const items=(cands.some(c=>c.triple)?cands.filter(c=>c.triple):cands).map(c=>c.it);
-  let supplier=null;for(const ln of lines.slice(0,6)){if(/[a-z]{3}/i.test(ln)&&!/quot|invoice|date|page|^to\b|ref|tel|phone|e-?mail|@|www|address|tin|gst|^h\.|road|street|male/i.test(ln)&&ln.length<60){supplier=ln;break}}
-  return{supplier:supplier||fallbackName,items};
+  return{supplier:guessSupplier(lines),items};
 }
 const samplePromise=use('sample');
 async function extract(file,label){
@@ -280,7 +295,7 @@ function addSupplier(data,fallbackName){
   if(S.sample){S.rows=[];S.suppliers=[];S.sample=false}
   const items=(data.items||[]).filter(it=>it&&it.name&&num(it.unit_price)!=null);
   if(!items.length)throw new Error('No priced items found');
-  const sup={id:'s'+Date.now()+Math.random().toString(36).slice(2,6),name:(data.supplier||fallbackName).toString().slice(0,80),cells:{}};
+  const sup={id:'s'+Date.now()+Math.random().toString(36).slice(2,6),name:String((data.supplier&&!looksCode(String(data.supplier))&&data.supplier)||(!looksCode(fallbackName)&&fallbackName)||('Supplier '+(S.suppliers.length+1))).slice(0,80),cells:{}};
   for(const it of items){let row=null;
     if(it.match){row=S.rows.find(r=>r.name===it.match)||S.rows.find(r=>r.key===norm(it.match))}
     if(!row)row=S.rows.find(r=>r.key===norm(it.name));
