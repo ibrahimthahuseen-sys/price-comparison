@@ -174,7 +174,7 @@ $('#wrap').addEventListener('click',e=>{const b=e.target.closest('button');if(!b
   if(b.dataset.del!=null){const s=S.suppliers.splice(+b.dataset.del,1)[0];S.rows=S.rows.filter(r=>S.suppliers.some(x=>x.cells[r.key]));toast('Removed '+s.name)}
   if(b.dataset.rdel!=null){const r=S.rows.splice(+b.dataset.rdel,1)[0];S.suppliers.forEach(s=>delete s.cells[r.key])}
   save();render()});
-$('#clearBtn').onclick=()=>{S={mode:S.mode,rows:[],suppliers:[]};save();render();$('#queue').innerHTML=''};
+$('#clearBtn').onclick=()=>{S={mode:S.mode,rows:[],suppliers:[],ignore:S.ignore||[]};save();render();$('#queue').innerHTML=''};
 
 // ---------- libraries (loaded on demand) ----------
 const libs={};
@@ -225,49 +225,84 @@ Rules:
 Existing item names: `;
 
 // rule-based reader for quote text (PDF text, pasted text) — works without AI
-const UNITS=/^(pcs?|nos?|no|ea|each|set|sets|box|boxes|kg|g|m|mtr|mtrs|meter|ltr|l|litre|roll|rolls|ream|reams|pkt|pack|bag|bags|ctn|carton|dozen|doz|pair|lot|unit|units|sqm|sqft|ft|lm)\.?$/i;
-const SKIP=/sub ?total|grand ?total|^total|total amount|net total|g\.?s\.?t|t\.?g\.?s\.?t|vat|tax|discount|amount in words|balance|round(ing)? off|bank|account|terms|validity|delivery|payment|signature|thank/i;
-// find the issuing company's name, never a quote number, date or the customer
-const CO=/\b(pvt|private|ltd|limited|llc|l\.l\.c|inc|co\.|company|corp|corporation|trading|traders|enterprises?|supplies|supplier|stores?|hardware|industries|investments?|holdings|group|services|solutions|international|marketing|distributors?|agency|agencies|mart|centre|center)\b/i;
-const NOTNAME=/quot|invoice|estimate|proforma|\bdate\b|\bref\b|\bno\b\.?|number|#|page|valid|tel|phone|fax|mobile|e-?mail|@|www\.|http|tin\b|gst|reg(istration)?\b|account|bank|^h\.|road|street|magu|hingun|floor|address|po box|p\.o/i;
-const looksCode=t=>{const d=(t.match(/\d/g)||[]).length,l=(t.match(/[a-z]/gi)||[]).length;return d>=3&&d>=l*0.5||/^[A-Z]{1,5}[-\/ ]?\d{2,}/i.test(t)||!/[a-z]{3}/i.test(t)};
-function cleanName(ln){return ln.split(/\s+(?=(?:quotation|quote|invoice|date|ref|no\.?|tel|phone|tin|gst)\b)/i)[0].replace(/[:|,–-]+$/,'').trim()}
-function guessSupplier(lines){
-  const head=[];let skipNext=false;
-  for(const ln of lines.slice(0,25)){
-    const TO=/^(to|attn|attention|customer|client|bill(ed)? to|ship to|deliver to|dear|m\/s)\b[\s:.\-]*/i;if(TO.test(ln)){skipNext=ln.replace(TO,'').trim().length<3;continue}
-    if(skipNext){skipNext=false;continue}
-    if(/(qty|quantity|description|particulars)/i.test(ln))break;
-    const c=cleanName(ln);if(c.length<3||c.length>70||looksCode(c)||NOTNAME.test(c))continue;head.push(c)}
-  const co=head.find(h=>CO.test(h));if(co)return co;
-  if(head.length)return head[0];
-  const em=lines.join(' ').match(/@([a-z0-9-]+)\.[a-z.]+/i);if(em&&!/gmail|yahoo|hotmail|outlook|icloud/i.test(em[1]))return em[1].replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
-  return null}
-function parseText(text,fallbackName){
+const UNITS=/^(pcs?|pieces?|nos?|no|ea|each|set|sets|box|boxes|kg|kgs|g|m|mtr|mtrs|meter|meters|ltr|l|litre|liters?|roll|rolls|ream|reams|pkt|pkts|pack|packs|bag|bags|ctn|ctns|carton|cartons|dozen|doz|pair|pairs|lot|unit|units|sqm|sqft|ft|lm|bkt|bucket|drum|drums|can|cans|tin|btl|bottle|bottles|length|lengths|sheet|sheets|coil|coils|pail|gal|gallon|job|lumpsum|ls)\.?$/i;
+const CUR=/^(mvr|mrf|rf|usd|us\$|\$|rs\.?|inr|aed|lkr|qar|sar|myr|eur|gbp)$/i,PRE=/^(mvr|mrf|rf|usd|\$|rs\.?|inr|aed|lkr|qar|sar|myr|eur|gbp)/i;
+const isNum=t=>/^[0-9][0-9,]*(\.\d+)?$/.test(t.replace(PRE,'').replace(/(\.\d{2,})[A-Z]$/,'$1'));
+const val=t=>parseFloat(t.replace(PRE,'').replace(/(\.\d{2,})[A-Z]$/,'$1').replace(/,/g,''));
+const isPct=t=>/^\(?\d+(\.\d+)?%\)?$/.test(t);
+const near=(a,b)=>b>0&&Math.abs(a-b)<=Math.max(0.02,b*0.011);
+const SUMLINE=/^(sub ?-?total|total|grand|net|untaxed|item total|gst|t?gst|vat|tax|discount|amount|balance|round)/i;
+const HEADER=l=>/\b(qty|quantity)\b/i.test(l)&&/(description|item|rate|price|amount|total|particulars)/i.test(l)&&!/\d[\d,]*\.\d{2}/.test(l);
+const CO=/\b(pvt|private|ltd|limited|llc|plc|inc|co\.|company|corp|corporation|trading|traders|enterprises?|supplies|supply|supplier|stores?|hardware|industries|investments?|holdings|group|services|solutions|international|marketing|distributors?|agency|agencies|mart|centre|center|engineering|electricals?|electronics|construction|stationers?|stationery)\b/i;
+const NOTNAME=/quot|invoice|estimate|proforma|sales order|\bdate\b|\bref\b|\bno\b\.?|number|#|page|valid|tel|phone|fax|mobile|e-?mail|@|www\.|http|\btin\b|\bgst\b|\bvat\b|\breg(istration)?\b|account|bank|prepared|printed|approved|salesperson|currency|payment|^h\.|road|street|magu|hingun|goalhi|floor|building|address|po box|p\.o\.? ?box/i;
+const looksCode=t=>{t=String(t);const d=(t.match(/\d/g)||[]).length,l=(t.match(/[a-z]/gi)||[]).length;return d>=3&&d>=l*0.5||/^[A-Z]{1,5}[-\/ ]?\d{2,}/i.test(t)||!/[a-z]{3}/i.test(t)};
+const nk=s=>String(s||'').toLowerCase().replace(/\b(pvt|private|ltd|limited|plc|the|co|company)\b/g,'').replace(/[^a-z0-9]/g,'');
+const CUST=/^(bill(ed)?[ -]?to|ship[ -]?to(\s+address)?|deliver(ed)?\s+to|customer(\s+name)?|client|name\s*\/\s*address|to|attn|attention|m\/s)\b\s*:?\s*/i;
+function fixSplit(s){const t=s.split(' ');for(let i=0;i<t.length-1;i++){const j=t[i]+t[i+1];if(/^[a-z]+$/i.test(j)&&CO.test(j)&&!CO.test(t[i])&&!CO.test(t[i+1])){t.splice(i,2,j);i--}}return t.join(' ')}
+function tidyName(s){s=fixSplit(s.replace(/["“”]/g,'').replace(/\s+/g,' ').replace(/[.,:;|\s]+$/,'').trim());
+  const h=s.split(' '),n=h.length;if(n%2===0&&h.slice(0,n/2).join(' ').toLowerCase()===h.slice(n/2).join(' ').toLowerCase())s=h.slice(0,n/2).join(' ');
+  if(s===s.toUpperCase())s=s.toLowerCase().replace(/(^|[\s(])([a-z])/g,(m,a,b)=>a+b.toUpperCase()).replace(/\b(Plc|Llc)\b/g,x=>x.toUpperCase());return s}
+
+function guessSupplier(lines,tableAt,ignore){
+  const cust=new Set();
+  lines.forEach((ln,i)=>{if(CUST.test(ln)){const rest=ln.replace(CUST,'').trim();if(rest.length>=3)cust.add(nk(rest.split(/\s{2,}| (?=quot|date|ref|tin)/i)[0]));else{for(const k of [1,2])if(lines[i+k])cust.add(nk(lines[i+k]))}}
+    if(/\bc\/o\b/i.test(ln))cust.add(nk(ln.replace(/.*c\/o\.?\s*/i,'')))});
+  cust.delete('');ignore.forEach(x=>cust.add(x));
+  const isCust=s=>{const k=nk(s);return !k||[...cust].some(c=>c.length>=4&&(k.includes(c)||c.includes(k)))};
+  const ok=s=>s&&s.length>=3&&s.length<=70&&!looksCode(s)&&!isCust(s);
+  const head=lines.slice(0,tableAt>0?tableAt:25);
+  // a. company line at the very top
+  for(const ln of head.slice(0,3)){const c=ln.split(/\s+(?=(?:quotation|quote|invoice|date|ref|no\.?|tel|phone|tin|gst)\b)/i)[0];if(CO.test(c)&&ok(c)&&!NOTNAME.test(c.replace(CO,'')))return{name:tidyName(c),cust}}
+  // b. who to pay
+  const all=lines.join('\n');
+  const pm=[...all.matchAll(/(?:payable to|cheques? (?:to|in favou?r of)|made to|a\/c name|account name|beneficiary(?: name)?)\s*(?:\([^)]*\))?\s*[:\-]?\s*(?:the\s+compan\s?y\s+)?["“]?([A-Za-z][A-Za-z0-9&.,()'’ \-]{2,70}?)(?=["”]|\s{2,}|\s*\||,\s*(?:sbi|bml|mib|bank)|\s+(?:a\/c|account|bank)\b|\n|$)/gi)].map(m=>m[1].trim()).filter(s=>CO.test(fixSplit(s))&&ok(s));
+  if(pm.length)return{name:tidyName(pm[0]),cust};
+  // c. any company line above the table
+  for(const ln of head){const c=ln.split(/\s+(?=(?:quotation|quote|invoice|date|ref|no\.?|tel|phone|tin|gst)\b)/i)[0];if(CO.test(c)&&ok(c)&&!/(prepared|printed|approved|by:)/i.test(c))return{name:tidyName(c),cust}}
+  // d. email / website domain
+  for(const m of all.matchAll(/(?:@|www\.)([a-z0-9-]+)\./gi)){const d=m[1];if(/gmail|yahoo|hotmail|outlook|icloud|live/i.test(d))continue;if(!isCust(d))return{name:d.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()),cust}}
+  // e. first plain line at the top
+  for(const ln of head.slice(0,8)){if(ok(ln)&&!NOTNAME.test(ln)&&/[a-z]{3}/i.test(ln))return{name:tidyName(ln),cust}}
+  return{name:null,cust};
+}
+
+function parseText(text,fallbackName,ignore=[]){
   const lines=text.split(/\n/).map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
-  let gstAll=null;const gm=text.match(/(?:gst|tgst|vat|tax)[^0-9\n]{0,15}(\d{1,2}(?:\.\d+)?)\s*%/i);if(gm)gstAll=+gm[1];
-  const CUR=/^(mvr|rf|usd|us\$|\$|rs\.?|inr|aed|lkr|qar|sar|myr|eur|gbp)$/i,PRE=/^(mvr|rf|usd|\$|rs\.?|inr|aed|lkr|qar|sar|myr|eur|gbp)/i;
-  const isNum=t=>/^[0-9][0-9,]*(\.\d+)?$/.test(t.replace(PRE,''));const val=t=>parseFloat(t.replace(PRE,'').replace(/,/g,''));
-  let order=null,unitCol=true;const cands=[];
-  for(const ln of lines){
-    const lo=ln.toLowerCase();
-    if(/(qty|quantity)/.test(lo)&&/(rate|price|unit cost|amount|total)/.test(lo)&&!/\d{2}/.test(lo)){const q=lo.search(/qty|quantity/),r=lo.search(/rate|unit ?price|price|unit cost/);if(r>=0)order=q<r?'qr':'rq';unitCol=/\bunit\b|uom|\bu\/m\b/.test(lo);continue}
-    if(SKIP.test(ln)||/tel|phone|fax|mobile|e-?mail|@|www\.|date|ref|p\.?o\.? ?no|quot(e|ation) ?no|tin\b|reg/i.test(ln))continue;
-    const toks=ln.split(' ');let i=0;if(toks.length>1&&/^\d{1,3}[.)]?$/.test(toks[0]))i=1;
-    let j=toks.length;while(j>i&&(isNum(toks[j-1])||CUR.test(toks[j-1])||toks[j-1]==='%'||/^\d+(\.\d+)?%$/.test(toks[j-1])||(unitCol&&UNITS.test(toks[j-1]))))j--;
-    const name=toks.slice(i,j).join(' ').replace(/[-–:|]+$/,'').trim();const tail=toks.slice(j);
-    const nums=tail.filter(isNum).map(val);const pt=tail.find(t=>/^\d+(\.\d+)?%$/.test(t));const lineG=pt?parseFloat(pt):null;const unit=(tail.find(t=>UNITS.test(t))||'').replace(/\.$/,'');
-    if(!/[a-z]{2}/i.test(name)||!nums.length)continue;
-    let qty=null,price=null,triple=false;
-    outer:for(let x=0;x<nums.length;x++)for(let y=x+1;y<nums.length;y++)for(let z=y+1;z<nums.length;z++){const m=nums[x]*nums[y];if(nums[z]>0&&Math.abs(m-nums[z])<=Math.max(0.02,nums[z]*0.011)){
-        if(order==='rq'){price=nums[x];qty=nums[y]}else if(order==='qr'){qty=nums[x];price=nums[y]}else{const xi=Number.isInteger(nums[x]);qty=xi?nums[x]:nums[y];price=xi?nums[y]:nums[x]}
-        triple=true;break outer}}
-    if(!triple){if(nums.length<2)continue;if(order==='rq'){price=nums[0];qty=Number.isInteger(nums[1])?nums[1]:null}else{qty=Number.isInteger(nums[0])?nums[0]:null;price=qty==null?nums[0]:nums[1]}}
-    if(!(price>0))continue;
-    cands.push({triple,it:{name,qty,unit,unit_price:price,gst_percent:lineG??gstAll,match:null}});
+  let gstAll=null;const gm=text.match(/\b(?:gst|tgst|vat|tax)\b[^%\n]{0,20}?(\d{1,2}(?:\.\d+)?)\s*%/i);if(gm)gstAll=+gm[1];
+  let order=null,tableAt=-1;
+  lines.forEach((l,i)=>{if(tableAt<0&&HEADER(l)){tableAt=i;const lo=l.toLowerCase(),q=lo.search(/\bqty\b|quantity/),r=lo.search(/\brate\b|unit ?price|\bprice\b|unit cost/);if(q>=0&&r>=0)order=q<r?'qr':'rq'}});
+  if(tableAt>0&&!order){const lo=(lines[tableAt-1]+' '+lines[tableAt]).toLowerCase(),q=lo.search(/\bqty\b|quantity/),r=lo.search(/\brate\b|unit ?price|\bprice\b/);if(q>=0&&r>=0)order='qr'}
+  const used=new Set(),cands=[];
+  for(let li=Math.max(0,tableAt+1);li<lines.length;li++){
+    const ln=lines[li];if(SUMLINE.test(ln)||HEADER(ln))continue;
+    const toks=ln.split(' ');const ni=toks.map((t,i)=>isNum(t)?i:-1).filter(i=>i>=0);
+    if(!ni.length||!/[a-z]{2}/i.test(ln))continue;
+    let q=-1,r=-1,a=-1,qv=null,rv=null;
+    // qty × rate = amount, amount right-most; avoid the serial/code in position 0 when possible
+    search:for(const skip0 of [true,false])for(let z=ni.length-1;z>=2;z--)for(let y=z-1;y>=1;y--)for(let x=y-1;x>=0;x--){const X=ni[x],Y=ni[y],Z=ni[z];if(skip0&&(X===0||Y===0))continue;
+      const vx=val(toks[X]),vy=val(toks[Y]),vz=val(toks[Z]);if(vz<=0||!near(vx*vy,vz))continue;
+      let qi=X,ri=Y;if(order==='rq'||(order!=='qr'&&!Number.isInteger(vx)&&Number.isInteger(vy))){qi=Y;ri=X}
+      q=qi;r=ri;a=Z;qv=val(toks[qi]);rv=val(toks[ri]);break search}
+    if(a<0&&ni.length>=2){ // qty may sit alone on the line above/below
+      for(const k of [li+1,li-1]){const nb=lines[k];if(!nb||used.has(k)||!/^\d[\d,]*(\.\d+)?$/.test(nb))continue;const nq=val(nb);
+        for(let z=ni.length-1;z>=1&&a<0;z--)for(let y=z-1;y>=0;y--){if(near(nq*val(toks[ni[y]]),val(toks[ni[z]]))){r=ni[y];a=ni[z];qv=nq;rv=val(toks[r]);used.add(k);break}}
+        if(a>=0)break}}
+    if(a<0||!(rv>0)||(!/[.,]/.test(toks[a])&&/(bank|a\/c|account|\bacc\b|swift|usd\s*:|mvr\s*:|tel|phone)/i.test(ln)))continue;
+    // build the item name from the words before the price
+    let words=toks.slice(0,r).map((t,i)=>({t,i})).filter(w=>w.i!==q);
+    if(words.length&&/^\d{1,3}[.)]?$/.test(words[0].t))words.shift(); // serial no.
+    for(let k=0;k<2&&words.length>1;k++){const t=words[0].t,dg=(t.match(/\d/g)||[]).length;if(/^\[.*\]$/.test(t)||(dg&&(dg>=3||(t.length>=5&&!/[a-z]/.test(t)))&&!/^\d+(\.\d+)?(mm|cm|m|w|v|kg|g|ml|l|"|'')$/i.test(t)))words.shift();else break}
+    while(words.length&&(UNITS.test(words[words.length-1].t)||CUR.test(words[words.length-1].t)||isNum(words[words.length-1].t)||isPct(words[words.length-1].t)))words.pop();
+    let name=words.map(w=>w.t).join(' ').replace(/^[-–:|#\s]+|[-–:|\s]+$/g,'').trim();
+    const prev=lines[li-1];
+    if(tableAt>=0&&li-1>tableAt&&prev&&!used.has(li-1)&&!/\d[\d,]*\.\d{2}\b/.test(prev)&&/[a-z]{3}/i.test(prev)&&!SUMLINE.test(prev)&&!HEADER(prev)&&prev.length<80){name=(prev+' '+name).trim();used.add(li-1)}
+    if(!/[a-z]{3}/i.test(name.split(' ').filter(t=>!CUR.test(t)).join(' ')))continue;
+    const unit=(toks.slice(0,a).find((t,i)=>i!==q&&UNITS.test(t))||'').replace(/\.$/,'');
+    const pt=toks.slice(r).find(isPct);used.add(li);
+    cands.push({name,qty:qv,unit,unit_price:rv,gst_percent:pt?parseFloat(pt.replace(/[()]/g,'')):gstAll,match:null});
   }
-  const items=(cands.some(c=>c.triple)?cands.filter(c=>c.triple):cands).map(c=>c.it);
-  return{supplier:guessSupplier(lines),items};
+  const g=guessSupplier(lines,tableAt,ignore);
+  return{supplier:g.name||null,items:cands,customers:[...g.cust]};
 }
 const samplePromise=use('sample');
 async function extract(file,label){
@@ -286,7 +321,7 @@ async function extract(file,label){
     }catch(e){aiErr=e;console.warn('AI read failed',e)}
   }
   if(got.wb){const h=heuristic(got.wb);if(h)return h}
-  if(got.text){const h=parseText(got.text,name.replace(/\.[^.]+$/,''));if(h.items.length)return h}
+  if(got.text){const h=parseText(got.text,name.replace(/\.[^.]+$/,''),S.ignore||[]);if(h.items.length)return h}
   if(got.images&&!sampleFn)throw new Error('this PDF is a scan or photo with no text layer — open the app on claude.ai to read it automatically');
   throw new Error(aiErr?('could not read items ('+(aiErr.message||aiErr.code)+')'):'no priced item lines found');
 }
@@ -302,6 +337,7 @@ function addSupplier(data,fallbackName){
     if(!row){row={key:norm(it.name),name:String(it.name).trim(),unit:it.unit||''};S.rows.push(row)}
     if(!row.unit&&it.unit)row.unit=it.unit;if(row.qty==null&&num(it.qty)!=null)row.qty=num(it.qty);
     if(!sup.cells[row.key])sup.cells[row.key]={price:num(it.unit_price),gst:num(it.gst_percent),qty:num(it.qty)}}
+  if(Array.isArray(data.customers))S.ignore=[...new Set([...(S.ignore||[]),...data.customers])].slice(-60);
   S.suppliers.push(sup);save();render();return items.length;
 }
 
